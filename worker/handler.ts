@@ -5,6 +5,30 @@ import { handleVSCRequest } from "./vscode.ts";
 
 const REMOTE_URL = "https://deno-website2.now.sh";
 
+export function withLog(
+  handler: (request: Request) => Promise<Response>,
+): (request: Request) => Promise<Response> {
+  return async (req) => {
+    const start = new Date();
+    let res: Response;
+    try {
+      res = await handler(req);
+    } catch (err) {
+      console.error(err);
+      res = new Response("500 Internal Server Error\nPlease try again later.", {
+        status: 500,
+      });
+    }
+    const duration = new Date().getTime() - start.getTime();
+    console.log(
+      `%c${res.status} %c${duration}ms ${new URL(req.url).pathname}`,
+      `color: ${res.status >= 200 && res.status <= 499 ? "green" : "red"}`,
+      "color: inherit",
+    );
+    return res;
+  };
+}
+
 export function handleRequest(request: Request) {
   const accept = request.headers.get("accept");
   const isHtml = accept && accept.indexOf("html") >= 0;
@@ -64,14 +88,26 @@ export function extractAltLineNumberReference(
   };
 }
 
-function proxyFile(url: URL, remoteUrl: string, request: Request) {
+async function proxyFile(
+  url: URL,
+  remoteUrl: string,
+  request: Request,
+): Promise<Response> {
   const init = {
     method: request.method,
     headers: request.headers,
   };
   const urlR = remoteUrl + url.pathname;
-  console.log(`Proxy ${url} to ${urlR}`);
   const modifiedRequest = new Request(urlR, init);
-  console.log("modifiedRequest", modifiedRequest.url);
-  return fetch(modifiedRequest);
+  let lastErr;
+  for (let i = 0; i < 3; i++) {
+    try {
+      return await fetch(modifiedRequest);
+    } catch (err) {
+      // TODO(lucacasonato): only retry on known retryable errors
+      console.warn("retrying on proxy error", err);
+      lastErr = err;
+    }
+  }
+  throw lastErr;
 }
